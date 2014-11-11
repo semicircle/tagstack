@@ -67,8 +67,8 @@ type job struct {
 
 // This should be called once the struct is configured properly.
 func (index *Index) Init() {
-	if index.HighNodeBoundary < 5 {
-		Logger.Panicln("HighNodeBoundary < 5.")
+	if index.HighNodeBoundary < 3 {
+		Logger.Panicln("HighNodeBoundary < 3.")
 	}
 
 	if index.ItemLoadFunc == nil {
@@ -80,6 +80,8 @@ func (index *Index) Init() {
 	if index.Rule != nil {
 		index.rule = index.Rule.init()
 	}
+
+	go index.workingRountine()
 
 	index.initialized = true
 }
@@ -104,7 +106,7 @@ func (index *Index) Remove(id uint64) {
 }
 
 // Query by tags in the [start, stop] range (including both start/stop)
-func (index *Index) Query(tags []string, start, stop int) (id []uint64) {
+func (index *Index) Query(tags []string, start, stop int) (ids []uint64) {
 	return index.QueryOptions(tags, start, stop, &IndexOptions{SortBy: SORT_BY_OVERALL})
 }
 
@@ -226,6 +228,7 @@ func (index *Index) workingRountine() {
 			if len(jobsMap) != 0 {
 				for _, op = range jobsMap {
 					index.doIndxJob(op)
+					index.wgDone.Done()
 				}
 				jobsMap = nil
 				jobsMap = make(map[uint64]*job)
@@ -299,6 +302,7 @@ func (idx *Index) doUpdateJob(op *job) {
 	// apply rules
 	curr_taginfos := make([]*taginfo, len(curr_tags), len(curr_tags)+1)
 	for i, tag := range curr_tags {
+		curr_taginfos[i] = &taginfo{}
 		curr_taginfos[i].title = tag
 		curr_taginfos[i].score = scores[i]
 		curr_taginfos[i].enrelative = true
@@ -319,6 +323,10 @@ func (idx *Index) doUpdateJob(op *job) {
 	for {
 		if curr_i == len(curr_taginfos) {
 			removing_tags = append(removing_tags, last_tags[last_i:]...)
+			break
+		}
+
+		if last_i == len(last_tags) {
 			break
 		}
 

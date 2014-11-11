@@ -125,6 +125,9 @@ func (r *rule) applyRulesForIndexing(infos []*taginfo) []*taginfo {
 				// set alias.
 				info.aliases = make([]string, len(uppers))
 				copy(info.aliases, uppers)
+				for i := 0; i < len(info.aliases); i++ {
+					info.alias_scores = append(info.alias_scores, 0.5)
+				}
 				// if upper is one of the info.titles ? mark the info as disabled.
 				for _, upper := range uppers {
 					for _, info2 := range infos {
@@ -144,6 +147,9 @@ func (r *rule) applyRulesForIndexing(infos []*taginfo) []*taginfo {
 			if aliases, ok := r.entg_map[info.title]; ok {
 				// add the aliases to the unit.
 				info.aliases = append(info.aliases, aliases...)
+				for i := 0; i < len(info.aliases); i++ {
+					info.alias_scores = append(info.alias_scores, 0.5)
+				}
 			}
 		}
 	}
