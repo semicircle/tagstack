@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	reddit_factor = float64(45000 * 2 * 30)
+	reddit_factor = float64(45000 * 2 * 180)
 )
 
 func fade_score(score float64, date uint64) float64 {

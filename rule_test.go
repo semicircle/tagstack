@@ -1,7 +1,8 @@
 package tagstack
 
 import (
-	"log"
+	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -27,8 +28,14 @@ func dummyRule() *Rule {
 }
 
 func Test1(t *testing.T) {
-	rt := dummyRule()
-	lr := rt.init()
-	// log.Printf("%+v", rt)
-	log.Printf("%+v", lr)
+	// rt := dummyRule()
+	// lr := rt.init()
+	// // log.Printf("%+v", rt)
+	// log.Printf("%+v", lr)
+}
+
+func Test2(t *testing.T) {
+	x, err := json.Marshal(dummyRule())
+	must(err == nil, "json marshal rule :", err)
+	fmt.Println(string(x))
 }

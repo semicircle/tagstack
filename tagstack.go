@@ -3,6 +3,7 @@ package tagstack
 
 import (
 	"github.com/garyburd/redigo/redis"
+	"io/ioutil"
 	"log"
 	"os"
 )
@@ -22,7 +23,7 @@ var (
 	// Normal logger.
 	Logger = log.New(os.Stdout, "[tagstack]", log.LstdFlags)
 	// Debug logger.
-	DebugLogger = log.New(os.Stdout, "[tagstack.debug]", log.LstdFlags)
+	DebugLogger = log.New(ioutil.Discard, "", 0)
 )
 
 // What you should feed into this tag system.

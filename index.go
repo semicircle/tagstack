@@ -36,6 +36,7 @@ type Index struct {
 	EnableRandomSuggestTags bool
 
 	// private:
+	initOnce    sync.Once
 	initialized bool
 	// the updating / removing job.
 	chOp chan *job
@@ -67,23 +68,25 @@ type job struct {
 
 // This should be called once the struct is configured properly.
 func (index *Index) Init() {
-	if index.HighNodeBoundary < 3 {
-		Logger.Panicln("HighNodeBoundary < 3.")
-	}
+	index.initOnce.Do(func() {
+		if index.HighNodeBoundary < 3 {
+			Logger.Panicln("HighNodeBoundary < 3.")
+		}
 
-	if index.ItemLoadFunc == nil {
-		Logger.Panicln("ItemLoadFunc is nil")
-	}
+		if index.ItemLoadFunc == nil {
+			Logger.Panicln("ItemLoadFunc is nil")
+		}
 
-	index.chOp = make(chan *job, index.HighNodeBoundary*50)
-	index.wgDone = &sync.WaitGroup{}
-	if index.Rule != nil {
-		index.rule = index.Rule.init()
-	}
+		index.chOp = make(chan *job, index.HighNodeBoundary*50)
+		index.wgDone = &sync.WaitGroup{}
+		if index.Rule != nil {
+			index.rule = index.Rule.init()
+		}
 
-	go index.workingRountine()
+		go index.workingRountine()
 
-	index.initialized = true
+		index.initialized = true
+	})
 }
 
 // Update an item:
@@ -235,9 +238,7 @@ func (index *Index) workingRountine() {
 			} else {
 				op = <-index.chOp
 				jobsMap[op.id] = op
-
 			}
-
 		}
 	}
 }
@@ -299,7 +300,7 @@ func (idx *Index) doUpdateJob(op *job) {
 	// load the current tags.
 	curr_tags, scores := item.TagsWithScore()
 
-	// apply rules
+	// apply rules - prepare
 	curr_taginfos := make([]*taginfo, len(curr_tags), len(curr_tags)+1)
 	for i, tag := range curr_tags {
 		curr_taginfos[i] = &taginfo{}
@@ -308,65 +309,81 @@ func (idx *Index) doUpdateJob(op *job) {
 		curr_taginfos[i].enrelative = true
 	}
 	// apply rules - whose
-	curr_taginfos = append(curr_taginfos, &taginfo{title: "belongs_to:" + strconv.Itoa(int(item.WhoseId())), score: float64(1.0)})
+	if whose_id := item.WhoseId(); whose_id != 0 {
+		curr_taginfos = append(curr_taginfos, &taginfo{title: "belongs_to:" + strconv.Itoa(int(whose_id)), score: float64(1.0), enrelative: false})
+	}
+	// apply rules - fire
 	curr_taginfos = idx.rule.applyRulesForIndexing(curr_taginfos)
+
+	// dbgstr := make([]string, len(curr_taginfos))
+	// for i, info := range curr_taginfos {
+	// 	dbgstr[i] = info.title
+	// }
+	// DebugLogger.Println("doUpdateJob dbgstr:", dbgstr)
 
 	// load item tags
 	last_tags := idx.itemTagInfos(op.id)
 
-	// figure out which to remove.
-	removing_tags := make([]*taginfo, 0, 10)
+	if len(last_tags) != 0 {
+		// DebugLogger.Println("doUpdateJob last_tags:", last_tags, "curr_tags", curr_taginfos)
 
-	sort.Sort(taginfo_title_sorter(last_tags))
-	sort.Sort(taginfo_title_sorter(curr_taginfos))
-	last_i, curr_i := 0, 0
-	for {
-		if curr_i == len(curr_taginfos) {
-			removing_tags = append(removing_tags, last_tags[last_i:]...)
-			break
+		// figure out which to remove.
+		removing_tags := make([]*taginfo, 0, 10)
+
+		sort.Sort(taginfo_title_sorter(last_tags))
+		sort.Sort(taginfo_title_sorter(curr_taginfos))
+		last_i, curr_i := 0, 0
+		for {
+			if curr_i == len(curr_taginfos) {
+				removing_tags = append(removing_tags, last_tags[last_i:]...)
+				break
+			}
+
+			if last_i == len(last_tags) {
+				break
+			}
+
+			// compare
+			last_sel := last_tags[last_i]
+			curr_sel := curr_taginfos[curr_i]
+
+			if last_sel.title == curr_sel.title {
+				last_i++
+				curr_i++
+				continue
+			}
+
+			if last_sel.title < curr_sel.title {
+				removing_tags = append(removing_tags, last_sel)
+				last_i++
+				continue
+			}
+
+			if last_sel.title > curr_sel.title {
+				curr_i++
+				continue
+			}
 		}
 
-		if last_i == len(last_tags) {
-			break
-		}
+		DebugLogger.Println("doUpdateJob removing_tags:", removing_tags)
 
-		// compare
-		last_sel := last_tags[last_i]
-		curr_sel := curr_taginfos[curr_i]
-
-		if last_sel.title == curr_sel.title {
-			last_i++
-			curr_i++
-			continue
-		}
-
-		if last_sel.title < curr_sel.title {
-			removing_tags = append(removing_tags, last_sel)
-			last_i++
-			continue
-		}
-
-		if last_sel.title > curr_sel.title {
-			curr_i++
-			continue
-		}
-	}
-
-	// removing
-	for _, taginfo := range removing_tags {
-		// 1. remove basically ?
-		n := newIndexNode(idx.What, []string{taginfo.title}, 1.0)
-		n.detach(item)
-
-		// 2. is there highnodes ?
-		n.detach_deeper(item)
-
-		// 3. aliases.
-		for _, alias := range taginfo.aliases {
-			n := newIndexNode(idx.What, []string{alias}, 1.0)
+		// removing
+		for _, taginfo := range removing_tags {
+			// 1. remove basically ?
+			n := newIndexNode(idx.What, []string{taginfo.title}, 1.0)
 			n.detach(item)
+
+			// 2. is there highnodes ?
 			n.detach_deeper(item)
+
+			// 3. aliases.
+			for _, alias := range taginfo.aliases {
+				n := newIndexNode(idx.What, []string{alias}, 1.0)
+				n.detach(item)
+				n.detach_deeper(item)
+			}
 		}
+
 	}
 
 	// fill item tags:
@@ -428,7 +445,7 @@ func (idx *Index) doUpdateJob(op *job) {
 			tags_vector := make([]string, len(high_tags_mat))
 			scores_vector := make([]float64, len(high_tags_mat))
 			for j := 0; j < len(high_tags_mat); j++ {
-				s := i / expd_div[i] % expd_mod[i]
+				s := i / expd_div[j] % expd_mod[j]
 				tags_vector[j] = high_tags_mat[j][s]
 				scores_vector[j] = high_scores_mat[j][s]
 			}
@@ -436,8 +453,40 @@ func (idx *Index) doUpdateJob(op *job) {
 			sort.Sort(s)
 			n := newIndexNode(idx.What, nil, 1.0)
 			idx.updatingDeeper(n, true, s.tags, s.scores, s.en_relative_vector, item)
+
+			// 3. Random Suggestion.
+			if i == 0 && idx.EnableRandomSuggestTags {
+				leng := len(tags_vector)
+				if leng > 10 {
+					leng = 10
+				}
+				for i := 0; i < leng; i++ {
+					nl1 := newIndexNode(idx.What, []string{tags_vector[i]}, 1.0)
+					nl1s := make([]string, 0, leng-1)
+					for j := 0; j < i; j++ {
+						if i != j {
+							nl1s = append(nl1s, tags_vector[j])
+
+							// nl2 := newIndexNode(idx.What, []string{tags_vector[i], tags_vector[j]}, 1.0)
+							// nl2s := make([]string, 0, leng-2)
+							// for k := 0; k < leng; k++ {
+							// 	if i != k && j != k {
+							// 		nl2s = append(nl2s, tags_vector[k])
+							// 	}
+							// }
+							// if len(nl2s) != 0 {
+							// 	nl2.addRandomSuggestTags(nl2s)
+							// }
+						}
+					}
+					if len(nl1s) != 0 {
+						nl1.addRandomSuggestTags(nl1s)
+					}
+				}
+			}
 		}
 	}
+
 }
 
 type updateSorter struct {
@@ -455,6 +504,7 @@ func (s *updateSorter) Swap(i, j int) {
 func (s *updateSorter) Less(i, j int) bool { return s.tags[i] < s.tags[j] }
 
 func (idx *Index) updatingDeeper(n *index_node, en_relative bool, right_tags []string, right_score []float64, en_relative_vector []bool, item Item) {
+	// DebugLogger.Println("updatingDeeper:", right_tags)
 	var itemcount int
 
 	n.attach(item)
@@ -481,8 +531,10 @@ func (idx *Index) updatingDeeper(n *index_node, en_relative bool, right_tags []s
 	if en_relative {
 		lentags := len(n.tags)
 		if lentags >= 2 {
-			curr := n.tags[1:]
+			curr := make([]string, lentags-1)
+			copy(curr, n.tags[1:])
 			for i := 0; i < lentags; i++ {
+				// DebugLogger.Println("setRelativeTags:", i, curr, n.tags[i], n.tags)
 				nr := newIndexNode(idx.What, curr, 1.0)
 				nr.setRelativeTags(n.tags[i], itemcount)
 				if i != lentags-1 {
@@ -491,6 +543,7 @@ func (idx *Index) updatingDeeper(n *index_node, en_relative bool, right_tags []s
 			}
 		}
 	}
+
 }
 
 func (idx *Index) updatingBombTest(n *index_node) bool {
@@ -498,7 +551,8 @@ func (idx *Index) updatingBombTest(n *index_node) bool {
 		n.setHigh()
 		ids := n.items()
 		idx.wgDone.Add(len(ids))
-		DebugLogger.Println("A new high tag:", idx.What, n.tags, "ids:", ids)
+		Logger.Println("A new high tag:", idx.What, n.tags)
+		Logger.Println("Affected items:", idx.What, "ids:", ids)
 		go func() {
 			for _, id := range ids {
 				idx.chOp <- &job{id: id}
@@ -635,7 +689,7 @@ func (node *index_node) detach_deeper(item Item) {
 			cursor := "0"
 			nodes := make([]string, 0, 10)
 			for {
-				vals, _ := redis.Values(ast2(c.Do("SSCAN", const_key_high_tags_set, cursor, "MATCH", pattern)))
+				vals, _ := redis.Values(ast2(c.Do("SSCAN", const_key_high_tags_set+node.what, cursor, "MATCH", pattern)))
 				cursor = string(vals[0].([]byte))
 				for _, ikey := range vals[1].([]interface{}) {
 					nodes = append(nodes, string(ikey.([]byte)))
@@ -728,6 +782,11 @@ func (node *index_node) itemsWith(cmd, sorting_key string, start, stop int) (ids
 }
 
 func (node *index_node) setRelativeTags(tag string, times int) {
+	// if strings.HasPrefix(tag, "belongs_to") {
+	// 	return
+	// }
+
+	// DebugLogger.Println("setRelativeTags:", node.tags, "to:", tag, "times", times)
 	c := GetWriteConn(node.shard)
 	defer c.Close()
 	ast2(c.Do("ZADD", node.idstr(const_key_idx_relative_rank), times, tag))
@@ -754,7 +813,7 @@ func (node *index_node) addRandomSuggestTags(tags []string) {
 func (node *index_node) randomSuggestTags(count int) []string {
 	c := GetReadConn(node.shard)
 	defer c.Close()
-	rels, _ := redis.Strings(ast2(c.Do("SRANDMEMBER", node.idstr(const_key_idx_rand_sug_set), 0, count-1)))
+	rels, _ := redis.Strings(ast2(c.Do("SRANDMEMBER", node.idstr(const_key_idx_rand_sug_set), count)))
 	return rels
 }
 
