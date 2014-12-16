@@ -543,7 +543,6 @@ func (idx *Index) updatingDeeper(n *index_node, en_relative bool, right_tags []s
 			}
 		}
 	}
-
 }
 
 func (idx *Index) updatingBombTest(n *index_node) bool {
@@ -556,6 +555,11 @@ func (idx *Index) updatingBombTest(n *index_node) bool {
 		go func() {
 			for _, id := range ids {
 				idx.chOp <- &job{id: id}
+			}
+		}()
+		go func() {
+			if HighTagNofityFunc != nil {
+				HighTagNofityFunc(n.tags)
 			}
 		}()
 		return true
@@ -595,7 +599,6 @@ func (idx *Index) setItemTagInfos(id uint64, infos []*taginfo) {
 	for i := 0; i < len(infos); i++ {
 		ast2(c.Receive())
 	}
-
 }
 
 func (idx *Index) node_str(key string, tags []string) string {
@@ -782,9 +785,10 @@ func (node *index_node) itemsWith(cmd, sorting_key string, start, stop int) (ids
 }
 
 func (node *index_node) setRelativeTags(tag string, times int) {
-	// if strings.HasPrefix(tag, "belongs_to") {
-	// 	return
-	// }
+	if strings.HasPrefix(tag, "belongs_to") {
+		Logger.Println("debug: setRelativeTags with belongs_to bug exists!")
+		return
+	}
 
 	// DebugLogger.Println("setRelativeTags:", node.tags, "to:", tag, "times", times)
 	c := GetWriteConn(node.shard)

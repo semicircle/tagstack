@@ -8,12 +8,16 @@ import (
 	"os"
 )
 
-// Redis backend configuration:
 type GetRedisConnFuncType func(shard_key int) redis.Conn
+
+type HighTagNotifyFuncType func(tags []string)
 
 var (
 	// To get reading / writing connections, tagstack is based on Redis & redigo.
 	GetReadConn, GetWriteConn GetRedisConnFuncType
+
+	// To notify if a new tag group becomes high.
+	HighTagNofityFunc HighTagNotifyFuncType
 
 	RedisShardMax int
 )
